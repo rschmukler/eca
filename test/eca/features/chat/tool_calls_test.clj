@@ -3,6 +3,7 @@
    [clojure.string :as string]
    [clojure.test :refer [are deftest is testing]]
    [eca.features.chat.lifecycle :as lifecycle]
+   [eca.features.chat.parent-coordinator :as parent-coordinator]
    [eca.features.chat.tool-calls :as tc]
    [eca.features.hooks :as f.hooks]
    [eca.features.tools :as f.tools]
@@ -507,6 +508,65 @@
           (is (= expected-provider-auth
                  (:provider-auth result))
               "provider-auth must be returned so providers can reuse refreshed auth metadata"))))))
+
+(deftest on-tools-called!-parent-coordinator-test
+  (testing "spawn batches pass the coordinator to children and append its summary"
+    (h/reset-components!)
+    (let [chat-id "test-chat"
+          db* (h/db*)
+          _ (swap! db* #(-> %
+                            (assoc-in [:chats chat-id :prompt-id] "prompt-1")
+                            (assoc-in [:chats chat-id :status] :running)
+                            (assoc-in [:chats chat-id :messages] [])
+                            (assoc-in [:chats chat-id :tool-calls "call-1" :status] :preparing)))
+          chat-ctx {:db* db*
+                    :config (h/config)
+                    :chat-id chat-id
+                    :prompt-id "prompt-1"
+                    :provider "openai"
+                    :agent :default
+                    :messenger (h/messenger)
+                    :metrics (h/metrics)}
+          received-msgs* (atom "")
+          add-to-history! (fn [msg]
+                            (swap! db* update-in [:chats chat-id :messages] (fnil conj []) msg))
+          tool-calls [{:id "call-1"
+                       :full-name "eca__spawn_agent"
+                       :arguments {"agent" "explorer" "task" "Explore"}
+                       :arguments-text "{}"}]
+          all-tools [{:name "spawn_agent"
+                      :full-name "eca__spawn_agent"
+                      :origin :native
+                      :server {:name "eca"}}]
+          create-context* (promise)
+          call-options* (promise)
+          disposed* (promise)]
+      (with-redefs [f.tools/all-tools (constantly all-tools)
+                    f.tools/approval (constantly :allow)
+                    f.hooks/trigger-if-matches! (fn [_ _ _ _ _] nil)
+                    f.tools/call-tool! (fn [& args]
+                                         (deliver call-options* (last args))
+                                         {:error false :contents [{:type :text :text "child result"}]})
+                    f.tools/tool-call-details-before-invocation (constantly nil)
+                    f.tools/tool-call-details-after-invocation (constantly nil)
+                    f.tools/tool-call-summary (constantly "Spawn explorer")
+                    lifecycle/maybe-renew-auth-token (fn [_] nil)
+                    parent-coordinator/create! (fn [context]
+                                                 (deliver create-context* context)
+                                                 "coordinator-1")
+                    parent-coordinator/complete! (fn [_db* coordinator-id]
+                                                   (is (= "coordinator-1" coordinator-id))
+                                                   "Preserve compatibility across both children.")
+                    parent-coordinator/dispose! (fn [_db* coordinator-id]
+                                                  (deliver disposed* coordinator-id))]
+        ((tc/on-tools-called! chat-ctx received-msgs* add-to-history! []) tool-calls)
+        (is (= chat-id (:chat-id @create-context*)))
+        (is (= "coordinator-1" (:parent-coordinator-id @call-options*)))
+        (is (= "coordinator-1" @disposed*))
+        (is (some #(and (= "user" (:role %))
+                        (string/includes? (get-in % [:content 0 :text])
+                                          "Preserve compatibility across both children"))
+                  (get-in @db* [:chats chat-id :messages])))))))
 
 (deftest on-tools-called!-rejection-returns-fresh-auth-test
   (testing "rejected subagent path also propagates refreshed auth"

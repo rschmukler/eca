@@ -860,6 +860,13 @@
           "markdownDescription": "Maximum number of tool-call steps before the agent is halted. Useful for limiting subagent execution.",
           "minimum": 1
         },
+        "maxQuestions": {
+          "type": "integer",
+          "description": "Maximum number of questions each spawned invocation of this subagent may ask a serialized parent-context coordinator. Defaults to 0, which disables the ask_parent tool.",
+          "markdownDescription": "Maximum number of questions each spawned invocation of this subagent may ask a serialized parent-context coordinator. Defaults to `0`, which disables the `ask_parent` tool.",
+          "minimum": 0,
+          "default": 0
+        },
         "defaultModel": {
           "type": "string",
           "description": "Default model for this agent, overriding the global default. May be a full provider/model id or a bare model name resolved against the currently selected provider's models (provider-relative alias).",

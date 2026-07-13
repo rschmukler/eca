@@ -258,6 +258,80 @@
                                :status "completed"}})
         (hk/close ch)))))
 
+(defn ^:private subagent-ask-parent-0
+  "Exercises a subagent question, coordinator answer and summary, then parent continuation."
+  [ch body]
+  (let [input (:input body)
+        instructions (:instructions body)
+        coordinator? (and (string? instructions)
+                          (string/includes? instructions "<ask-parent-coordinator>"))
+        user-texts (->> input
+                        (filter #(= "user" (:role %)))
+                        (mapcat :content)
+                        (keep :text))
+        first-user-text (first user-texts)
+        summary? (some #(string/includes? % "Summarize only the decisions") user-texts)
+        tool-output-call-ids (->> input
+                                  (filter #(= "function_call_output" (:type %)))
+                                  (keep :call_id)
+                                  set)]
+    (letfn [(send-text! [text]
+              (sse-send! ch "response.output_text.delta"
+                         {:type "response.output_text.delta" :delta text})
+              (sse-send! ch "response.completed"
+                         {:type "response.completed"
+                          :response {:output []
+                                     :usage {:input_tokens 10
+                                             :output_tokens 5}
+                                     :status "completed"}})
+              (hk/close ch))
+            (send-tool! [item-id call-id name arguments]
+              (let [args-json (json/generate-string arguments)]
+                (sse-send! ch "response.output_item.added"
+                           {:type "response.output_item.added"
+                            :item {:type "function_call"
+                                   :id item-id
+                                   :call_id call-id
+                                   :name name
+                                   :arguments ""}})
+                (sse-send! ch "response.function_call_arguments.delta"
+                           {:type "response.function_call_arguments.delta"
+                            :item_id item-id
+                            :delta args-json})
+                (sse-send! ch "response.completed"
+                           {:type "response.completed"
+                            :response {:output [{:type "function_call"
+                                                 :id item-id
+                                                 :call_id call-id
+                                                 :name name
+                                                 :arguments args-json}]
+                                       :usage {:input_tokens 10
+                                               :output_tokens 5}
+                                       :status "completed"}})
+                (hk/close ch)))]
+      (cond
+        (and coordinator? summary?)
+        (send-text! "Preserve the existing API for compatibility.")
+
+        coordinator?
+        (send-text! "Preserve the existing API.")
+
+        (contains? tool-output-call-ids "spawn-tool-1")
+        (send-text! "Final coordinated answer")
+
+        (contains? tool-output-call-ids "ask-tool-1")
+        (send-text! "Subagent used the parent answer")
+
+        (= "ask parent" first-user-text)
+        (send-tool! "ask-item-1" "ask-tool-1" "eca__ask_parent"
+                    {:question "Should I preserve the existing API?"})
+
+        :else
+        (send-tool! "spawn-item-1" "spawn-tool-1" "eca__spawn_agent"
+                    {:agent "explorer"
+                     :task "ask parent"
+                     :activity "asking parent"})))))
+
 (defn handle-openai-responses [req]
   (let [body (some-> (slurp (:body req))
                      (json/parse-string true))]
@@ -281,4 +355,5 @@
                        :reasoning-0 (reasoning-0 ch)
                        :reasoning-1 (reasoning-1 ch)
                        :tool-calling-0 (tool-calling-0 ch body)
-                       :subagent-spawn-0 (subagent-spawn-0 ch body)))))})))
+                       :subagent-spawn-0 (subagent-spawn-0 ch body)
+                       :subagent-ask-parent-0 (subagent-ask-parent-0 ch body)))))})))

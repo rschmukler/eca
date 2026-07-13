@@ -619,7 +619,7 @@
 
 (defn sync-prompt!
   [{:keys [provider model model-capabilities instructions
-           prompt past-messages user-messages config tools provider-auth subagent?]}]
+           prompt past-messages user-messages config tools provider-auth variant cancelled? subagent?]}]
   (prompt!
    {:sync? true
     :provider provider
@@ -629,6 +629,8 @@
     :tools tools
     :provider-auth provider-auth
     :past-messages past-messages
+    :variant variant
+    :cancelled? cancelled?
     :user-messages (or user-messages
                        [{:role "user" :content [{:type :text :text prompt}]}])
     :subagent? subagent?

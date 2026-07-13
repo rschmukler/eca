@@ -5,6 +5,8 @@
    [clojure.string :as string]
    [clojure.walk :as walk]
    [eca.features.tools.agent :as f.tools.agent]
+   [eca.features.tools.ask-parent :as f.tools.ask-parent]
+   [eca.features.tools.ask-user :as f.tools.ask-user]
    [eca.features.tools.background :as f.tools.background]
    [eca.features.tools.chat :as f.tools.chat]
    [eca.features.tools.custom :as f.tools.custom]
@@ -17,7 +19,6 @@
    [eca.features.tools.shell :as f.tools.shell]
    [eca.features.tools.skill :as f.tools.skill]
    [eca.features.tools.task :as f.tools.task]
-   [eca.features.tools.ask-user :as f.tools.ask-user]
    [eca.features.tools.util :as tools.util]
    [eca.logger :as logger]
    [eca.messenger :as messenger]
@@ -60,7 +61,7 @@
   ([all-tools tool args db config agent-name]
    (approval all-tools tool args db config agent-name nil))
   ([all-tools tool args db config agent-name {:keys [trust]}]
-   (let [{:keys [server name require-approval-fn]} tool
+   (let [{:keys [server name require-approval-fn auto-approve?]} tool
          remember-to-approve? (get-in db [:tool-calls name :remember-to-approve?])
          native-tools (filter #(= :native (:origin %)) all-tools)
          {:keys [allow ask deny byDefault]}   (merge (get-in config [:toolCall :approval])
@@ -74,6 +75,9 @@
 
                   (some #(approval-matches? % (:name server) name args native-tools) deny)
                   :deny
+
+                  auto-approve?
+                  :allow
 
                   (some #(approval-matches? % (:name server) name args native-tools) ask)
                   :ask
@@ -151,6 +155,7 @@
           f.tools.skill/definitions
           f.tools.task/definitions
           f.tools.background/definitions
+          f.tools.ask-parent/definitions
           f.tools.ask-user/definitions
           (f.tools.agent/definitions config db)
           (f.tools.custom/definitions config)
@@ -223,7 +228,7 @@
 (defn call-tool! [^String full-name ^Map arguments chat-id tool-call-id agent-name db* config messenger metrics
                   call-state-fn         ; thunk
                   state-transition-fn   ; params: event & event-data
-                  {:keys [trust]}]
+                  {:keys [trust parent-coordinator-id]}]
   (logger/info logger-tag (format "Calling tool '%s' with args '%s'" full-name arguments))
   (let [arguments (update-keys arguments clojure.core/name)
         db @db*
@@ -257,7 +262,8 @@
                                                            :tool-call-id tool-call-id
                                                            :call-state-fn call-state-fn
                                                            :state-transition-fn state-transition-fn
-                                                           :trust trust})
+                                                           :trust trust
+                                                           :parent-coordinator-id parent-coordinator-id})
                            (f.mcp/call-tool! server-name tool-name arguments {:db db
                                                                               :db* db*
                                                                               :config config

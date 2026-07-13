@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add opt-in subagent `ask_parent` coordination with serialized shared parent context, per-agent question limits, and a compact parent summary.
+
 ## 0.146.2
 
 - Fix 400 on GitHub Copilot Claude adaptive-thinking models (e.g. Opus 4.8) when no variant is selected, by defaulting to adaptive thinking. #528

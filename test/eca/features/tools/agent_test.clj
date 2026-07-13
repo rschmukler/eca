@@ -3,6 +3,7 @@
    [clojure.test :refer [deftest is testing]]
    [eca.config :as config]
    [eca.features.chat :as f.chat]
+   [eca.features.chat.parent-coordinator :as parent-coordinator]
    [eca.features.tools :as f.tools]
    [eca.features.tools.agent :as f.tools.agent]
    [eca.llm-api :as llm-api]
@@ -15,6 +16,7 @@
   {:agent {"explorer" {:mode "subagent"
                        :description "Explores codebases"
                        :maxSteps 5
+                       :maxQuestions 2
                        :systemPrompt "You are an explorer."}
            "general" {:mode "subagent"
                       :description "General purpose agent"}
@@ -162,6 +164,46 @@
                         @chat-prompt-called*)))
           (testing "preserves subagent chat for resume replay"
             (is (some? (get-in @db* [:chats subagent-chat-id])))))))))
+
+(deftest spawn-agent-parent-coordinator-test
+  (testing "eligible agents are associated with the parent coordinator"
+    (let [db* (atom {:chats {"chat-1" {:id "chat-1" :model "test/model"}}})
+          subagent-chat-id "subagent-tc-1"
+          registered* (promise)]
+      (with-redefs [parent-coordinator/register-child!
+                    (fn [_db* coordinator-id child-chat-id child]
+                      (deliver registered* {:coordinator-id coordinator-id
+                                            :child-chat-id child-chat-id
+                                            :child child})
+                      true)
+                    requiring-resolve
+                    (fn [sym]
+                      (case sym
+                        eca.features.chat/prompt
+                        (fn [_params _db* _messenger _config _metrics]
+                          (swap! db* assoc-in [:chats subagent-chat-id :status] :idle)
+                          (swap! db* assoc-in [:chats subagent-chat-id :messages]
+                                 [{:role "assistant"
+                                   :content [{:type :text :text "Done."}]}]))
+                        (clojure.lang.RT/var (namespace sym) (name sym))))]
+        ((spawn-handler)
+         {"agent" "explorer" "task" "find files" "activity" "exploring"}
+         {:db* db*
+          :config test-config
+          :messenger (h/messenger)
+          :metrics (h/metrics)
+          :chat-id "chat-1"
+          :tool-call-id "tc-1"
+          :parent-coordinator-id "coordinator-1"
+          :call-state-fn (constantly {:status :executing})})
+        (is (= {:coordinator-id "coordinator-1"
+                :child-chat-id subagent-chat-id
+                :child {:agent-name "explorer" :task "find files"}}
+               @registered*))
+        (is (match? {:parent-coordinator-id "coordinator-1"
+                     :subagent-task "find files"
+                     :subagent {:max-questions 2}}
+                    (get-in @db* [:chats subagent-chat-id])))))))
 
 (deftest spawn-agent-trust-propagation-test
   (testing "forwards trust to subagent chat/prompt"

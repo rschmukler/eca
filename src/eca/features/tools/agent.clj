@@ -3,6 +3,7 @@
   (:require
    [clojure.string :as str]
    [eca.config :as config]
+   [eca.features.chat.parent-coordinator :as parent-coordinator]
    [eca.features.tools.util :as tools.util]
    [eca.logger :as logger]
    [eca.messenger :as messenger]
@@ -13,6 +14,13 @@
 
 (def ^:private logger-tag "[AGENT-TOOL]")
 (def ^:private activity-summary-max-length 40)
+
+(defn ^:private configured-max-questions
+  [agent-config]
+  (let [value (:maxQuestions agent-config)]
+    (if (and (integer? value) (pos? value))
+      (long value)
+      0)))
 
 (defn normalize-arguments
   "Normalize spawn_agent arguments before display, history, and invocation."
@@ -37,6 +45,7 @@
                   :description (:description agent-config)
                   :model (:defaultModel agent-config)
                   :max-steps (:maxSteps agent-config)
+                  :max-questions (configured-max-questions agent-config)
                   :system-prompt (:systemPrompt agent-config)
                   :tool-call (:toolCall agent-config)})))
        vec))
@@ -125,7 +134,7 @@
 (defn ^:private spawn-agent
   "Handler for the spawn_agent tool.
    Spawns a subagent to perform a focused task and returns the result."
-  [arguments {:keys [db* config messenger metrics chat-id tool-call-id call-state-fn trust]}]
+  [arguments {:keys [db* config messenger metrics chat-id tool-call-id call-state-fn trust parent-coordinator-id]}]
   (let [arguments (normalize-arguments arguments)
         agent-name (get arguments "agent")
         task (get arguments "task")
@@ -189,14 +198,25 @@
 
     (logger/info logger-tag (format "Spawning agent '%s' for task: %s (model: %s, variant: %s)" agent-name task subagent-model (or user-variant "default")))
 
-    (let [max-steps-limit (max-steps subagent)]
+    (let [max-steps-limit (max-steps subagent)
+          max-questions-limit (:max-questions subagent)
+          coordinator-enabled? (and parent-coordinator-id
+                                    (pos? max-questions-limit)
+                                    (parent-coordinator/register-child!
+                                     db*
+                                     parent-coordinator-id
+                                     subagent-chat-id
+                                     {:agent-name agent-name
+                                      :task task}))]
       (swap! db* assoc-in [:chats subagent-chat-id]
              (cond-> {:id subagent-chat-id
                       :parent-chat-id chat-id
                       :agent-name agent-name
+                      :subagent-task task
                       :subagent subagent
                       :current-step 0}
-               max-steps-limit (assoc :max-steps max-steps-limit)))
+               max-steps-limit (assoc :max-steps max-steps-limit)
+               coordinator-enabled? (assoc :parent-coordinator-id parent-coordinator-id)))
 
       (try
         ;; Require chat ns here to avoid circular dependency

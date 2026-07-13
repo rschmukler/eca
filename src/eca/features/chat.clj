@@ -1125,7 +1125,9 @@
                                                                      :arguments-text arguments-text
                                                                      :summary (f.tools/tool-call-summary all-tools resolved-full-name nil config @db*)})))
                 :on-tools-called (tc/on-tools-called!
-                                  (assoc chat-ctx :continue-fn
+                                  (assoc chat-ctx
+                                         :model-capabilities model-capabilities
+                                         :continue-fn
                                          (fn [tc-all-tools tc-user-messages]
                                            (if (get-in @db* [:chats chat-id :compact-done?])
                                              ;; Manual /compact maintenance prompt: skip postRequest hooks

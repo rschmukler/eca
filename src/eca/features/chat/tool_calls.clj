@@ -3,6 +3,7 @@
    [clojure.string :as string]
    [eca.db :as db]
    [eca.features.chat.lifecycle :as lifecycle]
+   [eca.features.chat.parent-coordinator :as parent-coordinator]
    [eca.features.hooks :as f.hooks]
    [eca.features.tools :as f.tools]
    [eca.features.tools.agent :as f.tools.agent]
@@ -787,6 +788,13 @@
       stop-turn? (assoc :stop-reason stop-reason
                         :stop-hook-name stop-hook-name))))
 
+(defn ^:private spawn-agent-tool-call?
+  [all-tools {:keys [full-name]}]
+  (let [{:keys [origin name server]} (f.tools/resolve-tool full-name all-tools)]
+    (and (= :native origin)
+         (= "eca" (:name server))
+         (= "spawn_agent" name))))
+
 (defn on-tools-called! [{:keys [db* config chat-id agent messenger metrics] :as chat-ctx}
                         received-msgs* add-to-history! user-messages]
   (fn [tool-calls]
@@ -808,9 +816,12 @@
           (when-not (string/blank? @received-msgs*)
             (add-to-history! {:role "assistant" :content [{:type :text :text @received-msgs*}]})
             (reset! received-msgs* ""))
-          (let [blocked-tool-call-info* (atom nil)]
-            ;; preToolCall continue:false short-circuits the rest of this batch.
-            (reduce (fn do-tool-call [_ {:keys [id full-name] :as tool-call}]
+          (let [parent-coordinator-id (when (some (partial spawn-agent-tool-call? all-tools) tool-calls)
+                                        (parent-coordinator/create! chat-ctx))
+                blocked-tool-call-info* (atom nil)]
+            (try
+              ;; preToolCall continue:false short-circuits the rest of this batch.
+              (reduce (fn do-tool-call [_ {:keys [id full-name] :as tool-call}]
                       (let [approved?*                                                    (promise)
                             {:keys [origin name server parameters]
                              :as   resolved-tool}                                           (f.tools/resolve-tool full-name all-tools)
@@ -879,7 +890,8 @@
                                                                                      metrics
                                                                                      (partial get-tool-call-state @db* chat-id id)
                                                                                      (partial transition-tool-call! db* chat-ctx id)
-                                                                                     {:trust (db/resolve-trust @db* chat-id)})
+                                                                                     {:trust (db/resolve-trust @db* chat-id)
+                                                                                      :parent-coordinator-id parent-coordinator-id})
                                             details              (f.tools/tool-call-details-after-invocation name arguments details result
                                                                                                              {:db           @db*
                                                                                                               :config       config
@@ -998,7 +1010,14 @@
                                                     :ex-data (ex-data t)
                                                     :message (.getMessage ^Throwable t)
                                                     :cause (.getCause ^Throwable t)})))))))
-            (f.tools.mcp/await-pending-tools-refresh @db* 5000)
+              (when parent-coordinator-id
+                (when-let [summary (parent-coordinator/complete! db* parent-coordinator-id)]
+                  (add-to-history! {:role "user"
+                                    :content [{:type :text
+                                               :text (str "<subagent-coordination-summary>\n"
+                                                          summary
+                                                          "\n</subagent-coordination-summary>")}]})))
+              (f.tools.mcp/await-pending-tools-refresh @db* 5000)
             ;; Token can expire during long tool calls (e.g. spawn_agent),
             ;; so renew before any continuation branch.
             (lifecycle/maybe-renew-auth-token chat-ctx)
@@ -1058,4 +1077,7 @@
                         (continue-fn all-tools user-messages)
                         {:tools all-tools
                          :new-messages (shared/messages-after-last-compact-marker
-                                        (get-in @db* [:chats chat-id :messages]))}))))))))))))
+                                        (get-in @db* [:chats chat-id :messages]))}))))))
+              (finally
+                (when parent-coordinator-id
+                  (parent-coordinator/dispose! db* parent-coordinator-id))))))))))

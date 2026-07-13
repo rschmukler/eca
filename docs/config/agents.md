@@ -111,6 +111,15 @@ Subagents can be configured in config or markdown and support/require these fiel
 - `model` (optional): which full model to use for this subagent, using primary agent model if not specified.
 - `tools` (optional): same as ECA tool approval logic to control what tools are allowed/askable/denied.
 - `maxSteps` (optional): set a max limit of turns/steps that his subagent must finish and return an answer.
+- `maxQuestions` (optional): maximum questions each spawned invocation may ask the parent-context coordinator. Defaults to `0`, which disables `ask_parent`.
+
+### Asking the parent context
+
+Subagents normally run with isolated context. Set `maxQuestions` in JSON config, or `max_questions` in Markdown frontmatter, to give a subagent the `ask_parent` tool. The tool is intended for decisions, preferences, and clarifications established by the parent conversation—not facts the subagent can determine with its own tools.
+
+When sibling subagents run in parallel, their questions are answered serially by one private coordinator initialized from the parent context. Each answer is generated with all earlier coordinator questions and answers in its context. After the children finish, ECA adds one compact coordination summary to the parent context alongside the normal subagent results. If no child asks a question, no coordinator model call or summary is produced.
+
+The limit applies independently to each spawned invocation. A question consumes quota when the coordinator accepts it. Setting the value to `0` explicitly disables inherited access.
 
 === "Markdown"
 
@@ -121,6 +130,7 @@ Subagents can be configured in config or markdown and support/require these fiel
     mode: subagent
     description: You sleep one second when asked
     model: ${env:MY_MODEL:anthropic/sonnet-4.5}
+    max_questions: 1
     tools:
       byDefault: ask
       deny: 
@@ -177,7 +187,8 @@ Subagents can be configured in config or markdown and support/require these fiel
           "systemPrompt": "You should run sleep 1 and return \"I slept 1 second\"",
           "defaultModel": "anthropic/sonnet-4.5",
           "toolCall": {...},
-          "maxSteps": 25 // Optional: to limit turns in subagent
+          "maxSteps": 25, // Optional: limit turns in the subagent
+          "maxQuestions": 1 // Optional: enable ask_parent with a per-invocation limit
         }
       }
     }

@@ -63,6 +63,7 @@
                   "mode: subagent\n"
                   "model: my-org-anthropic/sonnet-4.5\n"
                   "steps: 5\n"
+                  "max_questions: 2\n"
                   "tools:\n"
                   "  byDefault: ask\n"
                   "  deny:\n"
@@ -78,6 +79,7 @@
                    :mode "subagent"
                    :defaultModel "my-org-anthropic/sonnet-4.5"
                    :maxSteps 5
+                   :maxQuestions 2
                    :systemPrompt "You should run sleep 1 and return \"I sleeped 1 second\""
                    :toolCall {:approval {:byDefault "ask"
                                          :allow {"eca__shell_command" {}}
@@ -169,7 +171,21 @@
   (testing "tools as a number is ignored without crashing the agent"
     (let [config (#'agents/md->agent-config {:description "no tools" :tools 42})]
       (is (= "no tools" (:description config)))
-      (is (nil? (:toolCall config))))))
+      (is (nil? (:toolCall config)))))
+
+  (testing "max_questions zero is preserved as an explicit disable"
+    (is (= 0 (:maxQuestions (#'agents/md->agent-config {:max_questions 0})))))
+
+  (testing "camelCase maxQuestions is accepted in markdown frontmatter"
+    (is (= 3 (:maxQuestions (#'agents/md->agent-config {:maxQuestions 3})))))
+
+  (testing "invalid max_questions values are rejected"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"non-negative integer"
+                          (#'agents/md->agent-config {:max_questions -1})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"non-negative integer"
+                          (#'agents/md->agent-config {:max_questions "two"})))))
 
 (deftest normalize-tools-test
   (testing "map form passes through unchanged"

@@ -61,8 +61,13 @@
     :else nil))
 
 (defn ^:private md->agent-config
-  [{:keys [description mode model steps tools body inherit]}]
-  (let [tools-map (normalize-tools tools)]
+  [{:keys [description mode model steps tools body inherit max_questions maxQuestions]}]
+  (let [tools-map (normalize-tools tools)
+        max-questions (or max_questions maxQuestions)]
+    (when (and (some? max-questions)
+               (not (and (integer? max-questions) (not (neg? max-questions)))))
+      (throw (ex-info "Agent max_questions must be a non-negative integer"
+                      {:max-questions max-questions})))
     (cond-> {}
       inherit (assoc :inherit (str inherit))
       description (assoc :description description)
@@ -71,6 +76,7 @@
                           (str mode)))
       model (assoc :defaultModel (str model))
       steps (assoc :maxSteps (long steps))
+      (some? max-questions) (assoc :maxQuestions (long max-questions))
       (seq body) (assoc :systemPrompt body)
       tools-map (assoc :toolCall
                        (cond-> {:approval {}}

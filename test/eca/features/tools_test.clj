@@ -45,7 +45,19 @@
       (is (not (contains? tool-names "spawn_agent")))
       (is (not (contains? tool-names "task")))
       (is (not (contains? tool-names "git")))
-      (is (not (contains? tool-names "ask_user")))))
+      (is (not (contains? tool-names "ask_user")))
+      (is (not (contains? tool-names "ask_parent")))))
+
+  (testing "Eligible subagent includes an auto-approved ask_parent tool"
+    (let [runtime {:accepting?* (atom true) :cancelled?* (atom false)}
+          db {:chats {"sub-1" {:subagent {:name "explorer" :max-questions 2}
+                                :parent-coordinator-id "coordinator"}}
+              :parent-coordinators {"coordinator" runtime}}
+          config {:toolCall {:approval {:byDefault "ask"}}}
+          tools (f.tools/all-tools "sub-1" "explorer" db config)
+          ask-parent (some #(when (= "ask_parent" (:name %)) %) tools)]
+      (is (some? ask-parent))
+      (is (= :allow (f.tools/approval tools ask-parent {} db config "explorer")))))
 
   (testing "Do not include disabled native tools"
     (is (match?
@@ -211,6 +223,21 @@
           (is (= :allow (f.tools/approval all-tools request-tool {} {} {:toolCall {:approval {:byDefault "allow"}}} nil)))))
       (testing "fallback to manual approval"
         (is (= :ask (f.tools/approval all-tools request-tool {} {} {} nil)))))))
+
+(deftest auto-approval-test
+  (let [ask-parent {:name "ask_parent"
+                    :full-name "eca__ask_parent"
+                    :server {:name "eca"}
+                    :origin :native
+                    :auto-approve? true}
+        all-tools [ask-parent]]
+    (testing "auto-approved internal tools bypass the default ask policy"
+      (is (= :allow (f.tools/approval all-tools ask-parent {} {} {} "agent"))))
+    (testing "an explicit deny still wins"
+      (is (= :deny
+             (f.tools/approval all-tools ask-parent {} {}
+                               {:agent {"agent" {:toolCall {:approval {:deny {"eca__ask_parent" {}}}}}}}
+                               "agent"))))))
 
 (deftest approval-trust-test
   (let [request-tool {:name "request" :server {:name "web"} :origin :mcp}

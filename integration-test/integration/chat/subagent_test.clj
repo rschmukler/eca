@@ -126,3 +126,60 @@
                          (= "assistant" (:role e))
                          (matches? {:type "text" :text "Final answer"} (:content e))))
                   events))))))
+
+(deftest subagent-ask-parent-end-to-end-test
+  (eca/start-process!)
+  (eca/request! (fixture/initialize-request
+                 {:initializationOptions (assoc-in fixture/default-init-options
+                                                   [:agent "explorer" :maxQuestions]
+                                                   1)
+                  :capabilities {:codeAssistant {:chat {}}}}))
+  (eca/notify! (fixture/initialized-notification))
+
+  (llm.mocks/set-case! :subagent-ask-parent-0)
+  (let [resp (eca/request! (fixture/chat-prompt-request
+                            {:model "openai/gpt-5.2"
+                             :message "Coordinate the implementation"}))
+        parent-chat-id (:chatId resp)
+        events (drain-content-events-until
+                (fn [event]
+                  (and (= parent-chat-id (:chatId event))
+                       (= "assistant" (:role event))
+                       (= "text" (-> event :content :type))
+                       (= "Final coordinated answer" (-> event :content :text)))))
+        subagent-chat-id (->> events
+                              (keep :chatId)
+                              (filter #(string/starts-with? % "subagent-"))
+                              first)]
+    (is (string? subagent-chat-id))
+
+    (testing "the eligible subagent calls ask_parent and receives its answer"
+      (is (some (fn [event]
+                  (and (= subagent-chat-id (:chatId event))
+                       (= parent-chat-id (:parentChatId event))
+                       (= "assistant" (:role event))
+                       (matches? {:type "toolCallRun"
+                                  :name "ask_parent"}
+                                 (:content event))))
+                events)))
+      (is (some (fn [event]
+                  (and (= subagent-chat-id (:chatId event))
+                       (= parent-chat-id (:parentChatId event))
+                       (= "assistant" (:role event))
+                       (matches? {:type "toolCalled"
+                                  :name "ask_parent"
+                                  :error false
+                                  :outputs (m/embeds [{:type "text"
+                                                       :text "Preserve the existing API."}])}
+                                 (:content event))))
+                events))
+
+    (testing "the parent continuation receives the compact coordinator summary"
+      (let [final-request (llm.mocks/get-req-body :subagent-ask-parent-0)
+            input-texts (->> (:input final-request)
+                             (filter #(= "user" (:role %)))
+                             (mapcat :content)
+                             (keep :text))]
+        (is (some #(and (string/includes? % "<subagent-coordination-summary>")
+                        (string/includes? % "Preserve the existing API for compatibility."))
+                  input-texts))))))
